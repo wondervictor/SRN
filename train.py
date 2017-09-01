@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 
 import torch
+import torch.optim as optimizer
+
 
 
 config = {
