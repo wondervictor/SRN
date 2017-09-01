@@ -6,6 +6,7 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
 
+
 class BidirectionalLSTM(nn.Module):
 
     def __init__(self, input_size, hidden_size):
@@ -24,11 +25,11 @@ class BidirectionalLSTM(nn.Module):
     def get_state(self, input):
         batch_size = input.input_size(0)
         h = Variable(
-            torch.zero(2, batch_size, self.hidden_size)
+            torch.zero(2, 1, self.hidden_size)
         )
 
         c = Variable(
-            torch.zero(2, batch_size, self.hidden_size)
+            torch.zero(2, 1, self.hidden_size)
         )
         return h, c
 
@@ -102,7 +103,7 @@ class CNNLayers(nn.Module):
         x = self.pool(x)
         x = F.relu(self.conv7(x))
         return x
-        
+
 
 class LSTMEncoder(nn.Module):
 
@@ -123,36 +124,63 @@ class LSTMEncoder(nn.Module):
         self.num_layers = num_layers
         self.directions = 2 if is_bidirectional else 1
 
-    def get_state(self, input):
-        batch_size = input.size(0)
+    def init_state(self):
         h0_encoder = Variable(
-            torch.zeros(self.directions * self.num_layers, batch_size, self.hidden_size),
+            torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
             required_grad=False
         )
         c0_encoder = Variable(
-            torch.zeros(self.directions * self.num_layers, batch_size, self.hidden_size),
+            torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
             required_grad=False
         )
 
         return h0_encoder, c0_encoder
 
-    def forward(self, input_src):
+    def get_output_state(self, src_h_t):
+        if self.bidirectional:
+            h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
+        else:
+            h_t = src_h_t[-1]
+        return h_t
 
-        h0, c0 = self.get_state(input_src)
+    def forward(self, input_src, h, c):
+
+        # h0, c0 = self.get_state(input_src)
 
         src_out, (src_h_t, src_c_t) = self.encoder(
             input_src,
-            (h0, c0)
+            (h, c)
         )
 
-        if self.bidirectional:
-            h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
-            c_t = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
-        else:
-            h_t = src_h_t[-1]
-            c_t = src_c_t[-1]
+        # if self.bidirectional:
+        #     h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
+        #     c_t = torch.cat((src_c_t[-1], src_c_t[-2]), 1)
+        # else:
+        #     h_t = src_h_t[-1]
+        #     c_t = src_c_t[-1]
 
-        return src_out, h_t
+        return src_out, src_h_t, src_c_t
+
+
+class SRNEncoder(nn.Module):
+
+    def __init__(self, is_bidirectional, input_size, encoder_hidden_size=256, num_layers=2):
+        super(SRNEncoder, self).__init__()
+
+        self.cnn = CNNLayers()
+        self.lstm_encoder = LSTMEncoder(is_bidirectional=is_bidirectional,
+                                        input_size=input_size,
+                                        encoder_hidden_size=encoder_hidden_size,
+                                        num_layers=num_layers)
+
+    def forward(self, image, h, c):
+
+        x = self.cnn(image)
+        out, h_t, c_t = self.lstm_encoder(x, h, c)
+
+        return out, h_t, c_t
+
+
 
 
 
@@ -191,26 +219,11 @@ class GRUDecoder(nn.Module):
         output = F.log_softmax(self.out(output[0]))
         return output, hidden, attn_weights
 
-    def initHidden(self):
+    def init_hidden(self):
         result = Variable(torch.zeros(1, 1, self.hidden_size))
         return result
 
 
-class Seq2Seq(object):
-
-    def __init__(self, input_size, output_size, max_length, encoder_hidden_size=256, decoder_hidden_size=256):
-        self.encoder = LSTMEncoder(True, input_size, encoder_hidden_size, 2)
-        self.input_size = input_size
-        self.encoder_hidden_size = encoder_hidden_size
-
-        self.decoder = GRUDecoder(decoder_hidden_size, max_length, output_size, 1)
-
-
-    def train(self):
-
-
-    def evaluate(self):
-        pass
 
 
 
@@ -278,13 +291,100 @@ class AttentionDecoderGRU(nn.Module):
         return result
 
 
+class SoftDotAttention(nn.Module):
+    """Soft Dot Attention.
+
+    Ref: http://www.aclweb.org/anthology/D15-1166
+    Adapted from PyTorch OPEN NMT.
+    """
+
+    def __init__(self, dim):
+        """Initialize layer."""
+        super(SoftDotAttention, self).__init__()
+        self.linear_in = nn.Linear(dim, dim, bias=False)
+        self.sm = nn.Softmax()
+        self.linear_out = nn.Linear(dim * 2, dim, bias=False)
+        self.tanh = nn.Tanh()
+        self.mask = None
+
+    def forward(self, input, context):
+        """Propogate input through the network.
+
+        input: batch x dim
+        context: batch x sourceL x dim
+        """
+        target = self.linear_in(input).unsqueeze(2)  # batch x dim x 1
+
+        # Get attention
+        attn = torch.bmm(context, target).squeeze(2)  # batch x sourceL
+        attn = self.sm(attn)
+        attn3 = attn.view(attn.size(0), 1, attn.size(1))  # batch x 1 x sourceL
+
+        weighted_context = torch.bmm(attn3, context).squeeze(1)  # batch x dim
+        h_tilde = torch.cat((weighted_context, input), 1)
+
+        h_tilde = self.tanh(self.linear_out(h_tilde))
+
+        return h_tilde, attn
+
+
+class GRUAttentionDot(nn.Module):
+    r"""A gate recurrent unit cell with attention."""
+
+    def __init__(self, input_size, hidden_size, batch_first=True):
+        """Initialize params."""
+        super(GRUAttentionDot, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_layers = 1
+        self.batch_first = batch_first
+
+        self.input_weights = nn.Linear(input_size, 3 * hidden_size)
+        self.hidden_weights = nn.Linear(hidden_size, 3 * hidden_size)
+
+        self.attention_layer = SoftDotAttention(hidden_size)
+
+    def forward(self, input, hidden, ctx, ctx_mask=None):
+        """Propogate input through the network."""
+        def recurrence(input, hidden):
+            """Recurrence helper."""
+            hx = hidden  # n_b x hidden_dim
+            gates = self.input_weights(input) + \
+                self.hidden_weights(hx)
+            reset_gate, update_gate, alternative_gate = gates.chunk(3, 1)
+
+
+
+
+            cy = (forgetgate * cx) + (ingate * cellgate)
+            hy = outgate * F.tanh(cy)  # n_b x hidden_dim
+            h_tilde, alpha = self.attention_layer(hy, ctx.transpose(0, 1))
+
+            return h_tilde, cy
+
+        if self.batch_first:
+            input = input.transpose(0, 1)
+
+        output = []
+        steps = range(input.size(0))
+        for i in steps:
+            hidden = recurrence(input[i], hidden)
+            output.append(isinstance(hidden, tuple) and hidden[0] or hidden)
+
+        output = torch.cat(output, 0).view(input.size(0), *output[0].size())
+
+        if self.batch_first:
+            output = output.transpose(0, 1)
+
+        return output, hidden
 
 
 
 
 class Seq2SeqAttention(nn.Module):
 
-    def __init__(self, is_bidirectional,
+    def __init__(self,
+                 is_bidirectional,
                  input_size,
                  trg_hidden_dim,
                  output_size,
@@ -352,57 +452,6 @@ class Seq2SeqAttention(nn.Module):
 
         decoder_init_state = self.attend(h_t)
         decoder_init_state = F.tanh(decoder_init_state)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-class SRN(nn.Module):
-
-    def __init__(self):
-        super(SRN, self).__init__()
-        # 100X32
-        self.conv1 = nn.Conv2d(3,   64,  3, stride=1, padding=1)
-        self.conv2 = nn.Conv2d(64,  128, 3, stride=1, padding=1)
-        self.conv3 = nn.Conv2d(128, 256, 3, stride=1, padding=1)
-        self.conv4 = nn.Conv2d(256, 256, 3, stride=1, padding=1)
-        self.conv5 = nn.Conv2d(256, 512, 3, stride=1, padding=1)
-        self.conv6 = nn.Conv2d(512, 512, 3, stride=1, padding=1)
-        self.conv7 = nn.Conv2d(512, 512, 2, stride=1, padding=0)
-        self.pool = nn.MaxPool2d(2)
-
-
-
-    def initHidden(self):
-        pass
-
-
-    def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = self.pool(x)
-        x = F.relu(self.conv2(x))
-        x = self.pool(x)
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
-        x = self.pool(x)
-        x = F.relu(self.conv5(x))
-        x = F.relu(self.conv6(x))
-        x = self.pool(x)
-        x = F.relu(self.conv7(x))
 
 
 
