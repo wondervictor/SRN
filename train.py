@@ -113,6 +113,7 @@ class SRN(object):
                     break
 
         loss.backward()
+        for param in self.cnn.parameters():
         self.cnn_optimizer.step()
         self.encoder_optimizer.step()
         self.decoder_optimizer.step()
