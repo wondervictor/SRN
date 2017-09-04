@@ -7,10 +7,19 @@ import random
 
 hyper_paramenters = {
     "learning_rate": 0.001,
-    "batch_size": 32
+    "batch_size": 32,
+    "epoches": 100,
+    "print_step": 10,
 }
 
 EOS = 1
+
+
+class TrainLog(object):
+
+    def __init__(self):
+        pass
+
 
 class SRN(object):
 
@@ -23,8 +32,12 @@ class SRN(object):
             decoder_hidden_size=256,
             teacher_forcing_ratio=0.5
     ):
+
         self.learning_rate = config["learning_rate"]
         self.batch_size = config["batch_size"]
+        self.epoches = config["epoches"]
+        self.print_step = config["print_step"]
+
         self.cnn = CNNLayers()
         self.max_length = max_length
         self.teacher_forcing_ratio = teacher_forcing_ratio
@@ -103,7 +116,6 @@ class SRN(object):
                 if ni == EOS:
                     break
 
-
         loss.backward()
         self.cnn_optimizer.step()
         self.encoder_optimizer.step()
@@ -111,10 +123,19 @@ class SRN(object):
 
         return loss.data[0]
 
+    def train(self, data_loader):
 
-    def train(self):
-        pass
+        for epoch in range(self.epoches):
 
+            loss = 0.0
+            for idx, data in enumerate(data_loader):
+                image, label = data
+                current_loss = self.train_step(image, label)
+                loss += current_loss
+                if idx % self.print_step == 0:
+                    print("EPOCH: %s BATCH: %s LOSS: %s AVG_LOSS: %s" % (epoch, idx, current_loss, loss/(idx+1)))
+
+            print("EPOCH: %s AVG_LOSS: %s" % (epoch, len(data_loader)))
 
 
     def evaluate(self):
