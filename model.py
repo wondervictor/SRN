@@ -59,9 +59,28 @@ class Encoder(nn.Module):
             bidirectional=is_bidirectional
         )
 
-    def forward(self, input, length, hidden):
+    def init_state(self):
+        h0_encoder = Variable(
+            torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
+            required_grad=False
+        )
+        c0_encoder = Variable(
+            torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
+            required_grad=False
+        )
 
-        s_len, n_batch, n_feats = input.size()
+        return h0_encoder, c0_encoder
+
+    def get_output_state(self, src_h_t):
+        if self.bidirectional:
+            h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
+        else:
+            h_t = src_h_t[-1]
+        return h_t
+
+    def forward(self, input, hidden):
+
+        #s_len, n_batch, n_feats = input.size()
         outputs, hidden_t = self.lstm(
             input,
             hidden
@@ -95,9 +114,9 @@ class Attention(nn.Module):
 
 class Decoder(nn.Module):
 
-    def __init__(self, hidden_size, output_size, num_layers):
+    def __init__(self, hidden_size, output_size, num_layers, max_length):
         super(Decoder, self).__init__()
-        self.attend = Attention(hidden_size)
+        self.attend = Attention(hidden_size,max_length)
 
         self.hidden_size =hidden_size
         self.output_size = output_size
