@@ -40,7 +40,7 @@ class SRN(object):
         self.encoder_hidden_size = encoder_hidden_size
         self.decoder_hidden_size = decoder_hidden_size
 
-        input_size = 1000
+        input_size = 512
         self.encoder = Encoder(
             input_size=input_size,
             num_layers=2,
@@ -81,6 +81,8 @@ class SRN(object):
         decoder_input = Variable(torch.LongTensor([[0]]))
         decoder_context = Variable(torch.zeros(1, self.decoder_hidden_size))
         decoder_hidden = self.encoder.get_output_state(encoder_hidden[0])
+
+
 
         use_teacher_forcing = random.random() < self.teacher_forcing_ratio
 
@@ -126,6 +128,10 @@ class SRN(object):
             loss = 0.0
             for idx, data in enumerate(data_loader):
                 image, label = data
+                image = Variable(image.type(torch.FloatTensor))
+                label = Variable(label)
+                print(image)
+
                 current_loss = self.train_step(image, label)
                 loss += current_loss
                 if idx % self.print_step == 0:
@@ -141,21 +147,16 @@ def main():
 
     hyper_paramenters = {
         "learning_rate": 0.001,
-        "batch_size": 32,
+        "batch_size": 1,
         "epoches": 100,
         "print_step": 10,
     }
 
-    train_loader = torch_data.DataLoader(dataset=TestDataset(True), batch_size=16, shuffle=True)
+    train_loader = torch_data.DataLoader(dataset=TestDataset(True), batch_size=1, shuffle=True)
 
     srn = SRN(config=hyper_paramenters, output_size=10, max_length=10)
 
     srn.train(train_loader)
-
-    
-
-
-
 
 if __name__ == '__main__':
 

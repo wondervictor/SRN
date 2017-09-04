@@ -15,7 +15,7 @@ class CNNLayers(nn.Module):
     def __init__(self):
         super(CNNLayers, self).__init__()
         # 100X32
-        self.conv1 = nn.Conv2d(3,   64,  3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(1,   64,  3, stride=1, padding=1)
         self.conv2 = nn.Conv2d(64,  128, 3, stride=1, padding=1)
         self.conv3 = nn.Conv2d(128, 256, 3, stride=1, padding=1)
         self.conv4 = nn.Conv2d(256, 256, 3, stride=1, padding=1)
@@ -23,19 +23,27 @@ class CNNLayers(nn.Module):
         self.conv6 = nn.Conv2d(512, 512, 3, stride=1, padding=1)
         self.conv7 = nn.Conv2d(512, 512, 2, stride=1, padding=0)
         self.pool = nn.MaxPool2d(2)
+        self.pool2 = nn.MaxPool2d((2, 1))
+        self.bn = nn.BatchNorm2d(num_features=5)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = self.pool(x)
+        #x = self.bn(x)
         x = F.relu(self.conv2(x))
         x = self.pool(x)
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
+        #x = self.bn(x)
         x = self.pool(x)
         x = F.relu(self.conv5(x))
         x = F.relu(self.conv6(x))
-        x = self.pool(x)
+        #x = self.bn(x)
+        x = self.pool2(x)
         x = F.relu(self.conv7(x))
+        #x = self.bn(x)
+        x = x.view(11, 1, 512)
+
         return x
 
 
@@ -62,21 +70,20 @@ class Encoder(nn.Module):
     def init_state(self):
         h0_encoder = Variable(
             torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
-            required_grad=False
         )
         c0_encoder = Variable(
             torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
-            required_grad=False
         )
 
         return h0_encoder, c0_encoder
 
     def get_output_state(self, src_h_t):
-        if self.bidirectional:
+
+        if self.is_bidirectional:
             h_t = torch.cat((src_h_t[-1], src_h_t[-2]), 1)
         else:
             h_t = src_h_t[-1]
-        return h_t
+        return h_t.unsqueeze(0)
 
     def forward(self, input, hidden):
 
@@ -128,14 +135,20 @@ class Decoder(nn.Module):
             hidden_size=hidden_size,
             num_layers=self.num_layers,
         )
+        self.cat_linear = nn.Linear(hidden_size*2, hidden_size)
 
-        self.gru = nn.Linear(hidden_size*2, output_size)
+        self.out = nn.Linear(hidden_size*2, output_size)
 
     def forward(self, input, last_context, hidden, encoder_outputs):
 
         input_emb = self.embedding(input).view(1, 1, -1)
 
         rnn_input = torch.cat((input_emb, last_context.unsqueeze(0)), 2)
+
+        if hidden.shape[2] == 512:
+            hidden = F.relu(self.cat_linear(hidden))
+        print(hidden.shape)
+        
         rnn_output, hidden = self.gru(rnn_input, hidden)
 
         attn_weights = self.attend(rnn_output.squeeze(0), encoder_outputs)
