@@ -4,13 +4,9 @@ import torch
 import torch.optim as optimizer
 from model import *
 import random
+from data import TestDataset
+import torch.utils.data as torch_data
 
-hyper_paramenters = {
-    "learning_rate": 0.001,
-    "batch_size": 32,
-    "epoches": 100,
-    "print_step": 10,
-}
 
 EOS = 1
 
@@ -137,6 +133,30 @@ class SRN(object):
 
             print("EPOCH: %s AVG_LOSS: %s" % (epoch, len(data_loader)))
 
-
     def evaluate(self):
         pass
+
+
+def main():
+
+    hyper_paramenters = {
+        "learning_rate": 0.001,
+        "batch_size": 32,
+        "epoches": 100,
+        "print_step": 10,
+    }
+
+    train_loader = torch_data.DataLoader(dataset=TestDataset(True), batch_size=16, shuffle=True)
+
+    srn = SRN(config=hyper_paramenters, output_size=10, max_length=10)
+
+    srn.train(train_loader)
+
+    
+
+
+
+
+if __name__ == '__main__':
+
+    main()
