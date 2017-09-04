@@ -67,6 +67,10 @@ class Encoder(nn.Module):
             bidirectional=is_bidirectional
         )
 
+        self.out = nn.Linear(hidden_size*2, hidden_size)
+        self.hidden_out = nn.Linear(hidden_size*2, hidden_size)
+
+
     def init_state(self):
         h0_encoder = Variable(
             torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
@@ -88,12 +92,15 @@ class Encoder(nn.Module):
     def forward(self, input, hidden):
 
         #s_len, n_batch, n_feats = input.size()
-        outputs, hidden_t = self.lstm(
+        outputs, (hidden_t, _) = self.lstm(
             input,
             hidden
         )
+        hidden_t = torch.cat((hidden_t[-1], hidden_t[-2]), 1)
+        outputs = F.relu(self.out(outputs))
+        hidden_t = F.relu(self.hidden_out(hidden_t))
 
-        return outputs, hidden_t
+        return outputs, hidden_t.unsqueeze(0)
 
 
 class Attention(nn.Module):
@@ -115,7 +122,7 @@ class Attention(nn.Module):
 
     def score(self, hidden, encoder_output):
         energy = self.attn(encoder_output)
-        energy = hidden.dot(energy)
+        energy = hidden.squeeze(0).dot(energy.squeeze(0))
         return energy
 
 
@@ -123,7 +130,7 @@ class Decoder(nn.Module):
 
     def __init__(self, hidden_size, output_size, num_layers, max_length):
         super(Decoder, self).__init__()
-        self.attend = Attention(hidden_size,max_length)
+        self.attend = Attention(hidden_size, max_length)
 
         self.hidden_size =hidden_size
         self.output_size = output_size
@@ -135,7 +142,6 @@ class Decoder(nn.Module):
             hidden_size=hidden_size,
             num_layers=self.num_layers,
         )
-        self.cat_linear = nn.Linear(hidden_size*2, hidden_size)
 
         self.out = nn.Linear(hidden_size*2, output_size)
 
@@ -145,21 +151,17 @@ class Decoder(nn.Module):
 
         rnn_input = torch.cat((input_emb, last_context.unsqueeze(0)), 2)
 
-        if hidden.shape[2] == 512:
-            hidden = F.relu(self.cat_linear(hidden))
-        print(hidden.shape)
-        
         rnn_output, hidden = self.gru(rnn_input, hidden)
+        rnn_output = rnn_output.squeeze(0)
 
-        attn_weights = self.attend(rnn_output.squeeze(0), encoder_outputs)
+        attn_weights = self.attend(rnn_output, encoder_outputs)
 
         context = attn_weights.bmm(encoder_outputs.transpose(0, 1))
 
-        rnn_output = rnn_output.squeeze(0)
+        rnn_output = rnn_output
+        context = context.squeeze(0)
 
-        context = context.squeeze(1)
-
-        output = F.log_softmax(self.out(torch.cat((rnn_output, context), 1)))
+        output = F.softmax(self.out(torch.cat((rnn_output, context), 1)))
 
         return output, context, hidden, attn_weights
 

@@ -58,7 +58,7 @@ class SRN(object):
         self.encoder_optimizer = optimizer.RMSprop(params=self.encoder.parameters(), lr=self.learning_rate)
         self.decoder_optimizer = optimizer.RMSprop(params=self.decoder.parameters(), lr=self.learning_rate)
 
-        self.criterion = nn.NLLLoss()
+        self.criterion = nn.MSELoss()
 
     def train_step(self, image, target):
 
@@ -80,9 +80,9 @@ class SRN(object):
 
         decoder_input = Variable(torch.LongTensor([[0]]))
         decoder_context = Variable(torch.zeros(1, self.decoder_hidden_size))
-        decoder_hidden = self.encoder.get_output_state(encoder_hidden[0])
-
-
+        decoder_hidden = encoder_hidden#self.encoder.get_output_state(encoder_hidden)
+        target = target.squeeze(0)
+        target = target.type(torch.FloatTensor)
 
         use_teacher_forcing = random.random() < self.teacher_forcing_ratio
 
@@ -95,7 +95,6 @@ class SRN(object):
                     decoder_hidden,
                     encoder_outputs
                 )
-
                 loss += self.criterion(decoder_output[0], target[i])
                 decoder_input = target[i]
         else:
@@ -106,7 +105,6 @@ class SRN(object):
                     decoder_hidden,
                     encoder_outputs
                 )
-
                 loss += self.criterion(decoder_output[0], target[i])
                 topv, topi = decoder_output.data.topk(1)
                 ni = topi[0][0]
@@ -130,9 +128,8 @@ class SRN(object):
                 image, label = data
                 image = Variable(image.type(torch.FloatTensor))
                 label = Variable(label)
-                print(image)
-
                 current_loss = self.train_step(image, label)
+
                 loss += current_loss
                 if idx % self.print_step == 0:
                     print("EPOCH: %s BATCH: %s LOSS: %s AVG_LOSS: %s" % (epoch, idx, current_loss, loss/(idx+1)))
