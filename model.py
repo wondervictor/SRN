@@ -27,6 +27,7 @@ class CNNLayers(nn.Module):
         self.bn = nn.BatchNorm2d(num_features=5)
 
     def forward(self, x):
+        batch_size = x.size(0)
         x = F.relu(self.conv1(x))
         x = self.pool(x)
         #x = self.bn(x)
@@ -42,7 +43,7 @@ class CNNLayers(nn.Module):
         x = self.pool2(x)
         x = F.relu(self.conv7(x))
         #x = self.bn(x)
-        x = x.view(11, 1, 512)
+        x = x.view(11, batch_size, 512)
 
         return x
 
@@ -51,7 +52,7 @@ class Encoder(nn.Module):
 
     """LSTM Encoder"""
 
-    def __init__(self, input_size, num_layers, is_bidirectional, hidden_size):
+    def __init__(self, input_size, batch_size, num_layers, is_bidirectional, hidden_size):
         super(Encoder, self).__init__()
         self.num_layers = num_layers
         self.directions = 2 if is_bidirectional else 1
@@ -64,19 +65,19 @@ class Encoder(nn.Module):
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            bidirectional=is_bidirectional
+            bidirectional=is_bidirectional,
+            # batch_first=True
         )
-
+        self.batch_size = batch_size
         self.out = nn.Linear(hidden_size*2, hidden_size)
         self.hidden_out = nn.Linear(hidden_size*2, hidden_size)
 
-
     def init_state(self):
         h0_encoder = Variable(
-            torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
+            torch.zeros(self.directions * self.num_layers, self.batch_size, self.hidden_size),
         )
         c0_encoder = Variable(
-            torch.zeros(self.directions * self.num_layers, 1, self.hidden_size),
+            torch.zeros(self.directions * self.num_layers, self.batch_size, self.hidden_size),
         )
 
         return h0_encoder, c0_encoder
@@ -91,7 +92,6 @@ class Encoder(nn.Module):
 
     def forward(self, input, hidden):
 
-        #s_len, n_batch, n_feats = input.size()
         outputs, (hidden_t, _) = self.lstm(
             input,
             hidden
@@ -114,15 +114,19 @@ class Attention(nn.Module):
 
     def forward(self, hidden, encoder_outputs):
         seq_len = len(encoder_outputs)
-        attn_energies = Variable(torch.zeros(seq_len))
+        batch_size = encoder_outputs.shape[1]
+        attn_energies = Variable(torch.zeros(seq_len, batch_size))
         for i in range(seq_len):
             attn_energies[i] = self.score(hidden, encoder_outputs[i])
 
         return F.softmax(attn_energies).unsqueeze(0).unsqueeze(0)
 
     def score(self, hidden, encoder_output):
-        energy = self.attn(encoder_output)
-        energy = hidden.squeeze(0).dot(energy.squeeze(0))
+        energy = self.attn(encoder_output).squeeze(0)
+        hidden = hidden.view(2, 1, hidden.shape[2])
+        energy = energy.view(2, energy.shape[1], 1)
+        energy = torch.bmm(hidden, energy)
+        energy = energy.squeeze(1)
         return energy
 
 
@@ -150,18 +154,14 @@ class Decoder(nn.Module):
         input_emb = self.embedding(input).view(1, 1, -1)
 
         rnn_input = torch.cat((input_emb, last_context.unsqueeze(0)), 2)
-
         rnn_output, hidden = self.gru(rnn_input, hidden)
-        rnn_output = rnn_output.squeeze(0)
-
-        attn_weights = self.attend(rnn_output, encoder_outputs)
-
-        context = attn_weights.bmm(encoder_outputs.transpose(0, 1))
-
         rnn_output = rnn_output
-        context = context.squeeze(0)
-
-        output = F.softmax(self.out(torch.cat((rnn_output, context), 1)))
+        # print(rnn_output.shape, encoder_outputs.shape)
+        attn_weights = self.attend(rnn_output, encoder_outputs).squeeze(0).squeeze(0)
+        attn_weights = attn_weights.transpose(0, 1).unsqueeze(1)
+        context = attn_weights.bmm(encoder_outputs.transpose(0, 1))
+        context = context.squeeze(1).unsqueeze(0)
+        output = F.softmax(self.out(torch.cat((rnn_output, context), 2)))
 
         return output, context, hidden, attn_weights
 

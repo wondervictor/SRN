@@ -45,7 +45,8 @@ class SRN(object):
             input_size=input_size,
             num_layers=2,
             is_bidirectional=True,
-            hidden_size=encoder_hidden_size
+            hidden_size=encoder_hidden_size,
+            batch_size=self.batch_size
         )
 
         self.decoder = Decoder(
@@ -113,7 +114,6 @@ class SRN(object):
                     break
 
         loss.backward()
-        for param in self.cnn.parameters():
         self.cnn_optimizer.step()
         self.encoder_optimizer.step()
         self.decoder_optimizer.step()
@@ -143,14 +143,16 @@ class SRN(object):
 
 def main():
 
+
+    batch_size = 2
     hyper_paramenters = {
         "learning_rate": 0.001,
-        "batch_size": 1,
+        "batch_size": batch_size,
         "epoches": 100,
         "print_step": 10,
     }
 
-    train_loader = torch_data.DataLoader(dataset=TestDataset(True), batch_size=1, shuffle=True)
+    train_loader = torch_data.DataLoader(dataset=TestDataset(True), batch_size=batch_size, shuffle=True)
 
     srn = SRN(config=hyper_paramenters, output_size=10, max_length=10)
 
