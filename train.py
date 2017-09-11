@@ -4,7 +4,7 @@ import torch
 import torch.optim as optimizer
 from model import *
 import random
-from data import TestDataset
+from data import create_dataset
 import torch.utils.data as torch_data
 
 
@@ -39,6 +39,7 @@ class SRN(object):
         self.teacher_forcing_ratio = teacher_forcing_ratio
         self.encoder_hidden_size = encoder_hidden_size
         self.decoder_hidden_size = decoder_hidden_size
+        self.output_size = output_size
 
         input_size = 512
         self.encoder = Encoder(
@@ -59,7 +60,7 @@ class SRN(object):
         self.encoder_optimizer = optimizer.RMSprop(params=self.encoder.parameters(), lr=self.learning_rate)
         self.decoder_optimizer = optimizer.RMSprop(params=self.decoder.parameters(), lr=self.learning_rate)
 
-        self.criterion = nn.MSELoss()
+        self.criterion = nn.CrossEntropyLoss()
 
     def train_step(self, image, target):
 
@@ -79,17 +80,18 @@ class SRN(object):
 
         encoder_outputs, encoder_hidden = self.encoder.forward(input_sequence, encoder_hidden)
 
-        decoder_input = Variable(torch.LongTensor([[0]]))
-        decoder_context = Variable(torch.zeros(1, self.decoder_hidden_size))
+        decoder_input = Variable(torch.LongTensor([[0]]*self.batch_size))
+        decoder_context = Variable(torch.zeros(1, self.batch_size, self.decoder_hidden_size))
         decoder_hidden = encoder_hidden#self.encoder.get_output_state(encoder_hidden)
         target = target.squeeze(0)
-        target = target.type(torch.FloatTensor)
+        # target = target.type(torch.FloatTensor)
+        target = target.transpose(0, 1)
 
         use_teacher_forcing = random.random() < self.teacher_forcing_ratio
 
         if use_teacher_forcing:
-
             for i in range(target_length):
+
                 decoder_output, decoder_context, decoder_hidden, decoder_attention = self.decoder.forward(
                     decoder_input,
                     decoder_context,
@@ -97,21 +99,27 @@ class SRN(object):
                     encoder_outputs
                 )
                 loss += self.criterion(decoder_output[0], target[i])
+                print(loss.data[0])
                 decoder_input = target[i]
         else:
             for i in range(target_length):
+
                 decoder_output, decoder_context, decoder_hidden, decoder_attention = self.decoder.forward(
                     decoder_input,
                     decoder_context,
                     decoder_hidden,
                     encoder_outputs
                 )
+
                 loss += self.criterion(decoder_output[0], target[i])
+                print(loss.data[0])
                 topv, topi = decoder_output.data.topk(1)
-                ni = topi[0][0]
-                decoder_input = Variable(torch.LongTensor([[ni]]))
-                if ni == EOS:
-                    break
+                ni = topi.squeeze(2)
+
+                decoder_input = ni
+                print(decoder_input.shape)
+                # if ni == EOS:
+                #     break
 
         loss.backward()
         self.cnn_optimizer.step()
@@ -120,22 +128,37 @@ class SRN(object):
 
         return loss.data[0]
 
-    def train(self, data_loader):
+    def train(self, dataset):
+
+        size = len(dataset)
+
+
+
 
         for epoch in range(self.epoches):
 
+            idx = 0
             loss = 0.0
-            for idx, data in enumerate(data_loader):
-                image, label = data
-                image = Variable(image.type(torch.FloatTensor))
-                label = Variable(label)
-                current_loss = self.train_step(image, label)
+
+            while idx < size:
+                image = np.array(dataset[0][idx: idx + self.batch_size])
+                label = np.array(dataset[1][idx: idx + self.batch_size])
+                idx += self.batch_size
+                label_lengths = [len(x) for x in label]
+                maxlen = np.max(label_lengths)
+                input_label = [s.tolist() + [0] * (maxlen - len(s)) for s in label]
+                batch_in = Variable(torch.LongTensor(input_label))
+                batch_in = batch_in.unsqueeze(1)
+                padded = torch.nn.utils.rnn.pack_padded_sequence(input=batch_in, lengths=label_lengths, batch_first=True)
+                image = Variable(torch.FloatTensor(image))
+                current_loss = self.train_step(image, padded)
 
                 loss += current_loss
                 if idx % self.print_step == 0:
                     print("EPOCH: %s BATCH: %s LOSS: %s AVG_LOSS: %s" % (epoch, idx, current_loss, loss/(idx+1)))
 
-            print("EPOCH: %s AVG_LOSS: %s" % (epoch, len(data_loader)))
+            print("EPOCH: %s AVG_LOSS: %s" % (epoch, size))
+
 
     def evaluate(self):
         pass
@@ -143,8 +166,8 @@ class SRN(object):
 
 def main():
 
+    batch_size = 8
 
-    batch_size = 2
     hyper_paramenters = {
         "learning_rate": 0.001,
         "batch_size": batch_size,
@@ -152,11 +175,12 @@ def main():
         "print_step": 10,
     }
 
-    train_loader = torch_data.DataLoader(dataset=TestDataset(True), batch_size=batch_size, shuffle=True)
+    #train_loader = torch_data.DataLoader(dataset=TestDataset(True), batch_size=batch_size, shuffle=True)
 
     srn = SRN(config=hyper_paramenters, output_size=10, max_length=10)
 
-    srn.train(train_loader)
+    dataset = create_dataset(True)
+    srn.train(dataset)
 
 if __name__ == '__main__':
 

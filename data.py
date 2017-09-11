@@ -7,6 +7,40 @@ import numpy as np
 from PIL import Image
 
 
+def create_dataset(train):
+    __dir__ = "/Users/vic/Dev/DeepLearning/Paddle/DeepLearningWithPaddle/OCR-CTC/data/"
+
+    if train:
+        data_path = __dir__ + "train_data.npy"
+        label_path = __dir__ + "train_label.npy"
+
+        data = np.load(data_path)
+        labels = np.load(label_path)
+        images = data
+        images = images.reshape((2000, 1, 32, 100))
+        train_labels = []
+        for label in labels:
+            label = np.array(label)
+            train_labels.append(label)
+        train_labels = np.array(train_labels)
+    else:
+        data_path = __dir__ + "test_data.npy"
+        label_path = __dir__ + "test_label.npy"
+
+        data = np.load(data_path)
+        labels = np.load(label_path)
+        images = data
+        images = images.reshape((1000, 1, 32, 100))
+        train_labels = []
+        for label in labels:
+            label = np.array(label)
+            train_labels.append(label)
+        train_labels = np.array(train_labels)
+    return images, train_labels
+
+
+
+
 class TestDataset(data.Dataset):
 
     def onehot(self, idx, num_class):
@@ -31,7 +65,7 @@ class TestDataset(data.Dataset):
             self.train_images = self.train_images.reshape((2000, 1, 32, 100))
             self.train_labels = []
             for label in labels:
-                label = [self.onehot(x, 10) for x in label]
+                # label = [self.onehot(x, 10) for x in label]
                 label = np.array(label)
                 self.train_labels.append(label)
             self.train_labels = np.array(self.train_labels)
@@ -49,11 +83,11 @@ class TestDataset(data.Dataset):
             self.test_images = data
             self.test_images = self.test_images.reshape((1000, 1, 32, 100))
             self.train_labels = []
-            for label in labels:
-                label = [self.onehot(x, 10) for x in label]
-                label = np.array(label)
-                print(label)
-                self.test_labels.append(label)
+            # for label in labels:
+            #     label = [self.onehot(x, 10) for x in label]
+            #     label = np.array(label)
+            #     print(label)
+            #     self.test_labels.append(label)
             self.test_labels = np.array(self.test_labels)
 
     def __getitem__(self, index):

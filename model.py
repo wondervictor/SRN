@@ -27,7 +27,6 @@ class CNNLayers(nn.Module):
         self.bn = nn.BatchNorm2d(num_features=5)
 
     def forward(self, x):
-        batch_size = x.size(0)
         x = F.relu(self.conv1(x))
         x = self.pool(x)
         #x = self.bn(x)
@@ -41,10 +40,9 @@ class CNNLayers(nn.Module):
         x = F.relu(self.conv6(x))
         #x = self.bn(x)
         x = self.pool2(x)
-        x = F.relu(self.conv7(x))
+        x = F.relu(self.conv7(x)).squeeze(2)
         #x = self.bn(x)
-        x = x.view(11, batch_size, 512)
-
+        x = x.transpose(1, 2)
         return x
 
 
@@ -150,12 +148,13 @@ class Decoder(nn.Module):
         self.out = nn.Linear(hidden_size*2, output_size)
 
     def forward(self, input, last_context, hidden, encoder_outputs):
+        # input = input.transpose(0, 1)
 
-        input_emb = self.embedding(input).view(1, 1, -1)
-
-        rnn_input = torch.cat((input_emb, last_context.unsqueeze(0)), 2)
+        input_emb = self.embedding(input)
+        input_emb = input_emb.transpose(0,1)
+        rnn_input = torch.cat((input_emb.squeeze(0), last_context.squeeze(0)), 1)
+        rnn_input = rnn_input.unsqueeze(0)
         rnn_output, hidden = self.gru(rnn_input, hidden)
-        rnn_output = rnn_output
         # print(rnn_output.shape, encoder_outputs.shape)
         attn_weights = self.attend(rnn_output, encoder_outputs).squeeze(0).squeeze(0)
         attn_weights = attn_weights.transpose(0, 1).unsqueeze(1)
