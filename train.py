@@ -60,6 +60,8 @@ def masked_cross_entropy(logits, target, length):
     return loss
 
 
+
+
 class TrainLog(object):
 
     def __init__(self):
@@ -112,18 +114,22 @@ class SRN(object):
 
         self.criterion = nn.CrossEntropyLoss()
 
+    def calculate_loss(self, input, target, length):
+        input = input[:length]
+        target = target.squeeze(0)
+        target = target[:length]
+        sub_loss = self.criterion(input, target)
+        return sub_loss
+
+    def check_params(self, layer):
+        for param in layer.parameters():
+            print(param.grad)
+
     def train_step(self, image, target, maxlength, target_lengths):
-
-        self.cnn_optimizer.zero_grad()
-        self.encoder.zero_grad()
-        self.decoder.zero_grad()
-
-        loss = 0
 
         input_sequence = self.cnn.forward(image)
         # target = target.squeeze(0)
         target = target.transpose(0, 1)
-        # print(target.shape)
 
         input_length = input_sequence.size()[0]
         target_length = maxlength #target.shape[0]
@@ -131,7 +137,6 @@ class SRN(object):
         encoder_hidden = self.encoder.init_state()
 
         encoder_outputs, encoder_hidden = self.encoder.forward(input_sequence, encoder_hidden)
-
         decoder_input = Variable(torch.LongTensor([0]*self.batch_size))
         decoder_context = Variable(torch.zeros(1, self.batch_size, self.decoder_hidden_size))
 
@@ -142,63 +147,29 @@ class SRN(object):
         all_decoder_outputs = Variable(torch.zeros(maxlength, self.batch_size, self.output_size))
 
         for i in range(maxlength):
-            decoder_output, decoder_context, decoder_hidden, decoder_attn = self.decoder(decoder_input, decoder_context, decoder_hidden, encoder_outputs)
-            all_decoder_outputs[i] = decoder_output
-            decoder_input = target[:,i]
+            all_decoder_outputs[i], decoder_context, decoder_hidden, decoder_attn = self.decoder(decoder_input, decoder_context, decoder_hidden, encoder_outputs)
+            decoder_input = target[:,:,i]
 
-        loss = masked_cross_entropy(
-            all_decoder_outputs.transpose(0, 1).contiguous(),
-            target.transpose(0, 1).contiguous(),
-            target_lengths
-        )
+        loss = Variable(torch.FloatTensor([0.]))
 
+        for i in range(self.batch_size):
+            sub_loss = self.calculate_loss(all_decoder_outputs[:, i, :], target[:, i, :], length=target_lengths[i])
+            loss += sub_loss
 
-
-
-        # use_teacher_forcing = random.random() < self.teacher_forcing_ratio
-        #
-        # if use_teacher_forcing:
-        #     for i in range(target_length):
-        #
-        #         decoder_output, decoder_context, decoder_hidden, decoder_attention = self.decoder.forward(
-        #             decoder_input,
-        #             decoder_context,
-        #             decoder_hidden,
-        #             encoder_outputs
-        #         )
-        #         loss += self.criterion(decoder_output[0], target[i])
-        #         print(loss.data[0])
-        #         decoder_input = target[i]
-        # else:
-        #     for i in range(target_length):
-        #
-        #         decoder_output, decoder_context, decoder_hidden, decoder_attention = self.decoder.forward(
-        #             decoder_input,
-        #             decoder_context,
-        #             decoder_hidden,
-        #             encoder_outputs
-        #         )
-        #
-        #         loss += self.criterion(decoder_output[0], target[i])
-        #         print(loss.data[0])
-        #         topv, topi = decoder_output.data.topk(1)
-        #         ni = topi.squeeze(2)
-        #
-        #         decoder_input = ni
-        #         print(decoder_input.shape)
-        #         # if ni == EOS:
-        #         #     break
-
+        self.cnn_optimizer.zero_grad()
+        self.encoder.zero_grad()
+        self.decoder.zero_grad()
         loss.backward()
-        self.cnn_optimizer.step()
-        self.encoder_optimizer.step()
         self.decoder_optimizer.step()
+        self.check_params(self.decoder)
+        self.encoder_optimizer.step()
+        self.cnn_optimizer.step()
 
         return loss.data[0]
 
     def train(self, dataset):
 
-        size = len(dataset)
+        size = len(dataset[0])
 
         for epoch in range(self.epoches):
 
@@ -214,7 +185,6 @@ class SRN(object):
                 input_label = [s.tolist() + [0] * (maxlen - len(s)) for s in label]
                 batch_in = Variable(torch.LongTensor(input_label))
                 batch_in = batch_in.unsqueeze(1)
-                # padded = torch.nn.utils.rnn.pack_padded_sequence(input=batch_in, lengths=label_lengths, batch_first=True)
                 image = Variable(torch.FloatTensor(image))
                 current_loss = self.train_step(image, batch_in, maxlen, label_lengths)
 
@@ -222,8 +192,7 @@ class SRN(object):
                 if idx % self.print_step == 0:
                     print("EPOCH: %s BATCH: %s LOSS: %s AVG_LOSS: %s" % (epoch, idx, current_loss, loss/(idx+1)))
 
-            print("EPOCH: %s AVG_LOSS: %s" % (epoch, size))
-
+            print("EPOCH: %s AVG_LOSS: %s" % (epoch, loss/size))
 
     def evaluate(self):
         pass
@@ -231,7 +200,7 @@ class SRN(object):
 
 def main():
 
-    batch_size = 8
+    batch_size = 16
 
     hyper_paramenters = {
         "learning_rate": 0.001,
