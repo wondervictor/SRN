@@ -122,8 +122,9 @@ class Attention(nn.Module):
         return F.softmax(attn_energies).unsqueeze(0).unsqueeze(0)
 
     def score(self, hidden, encoder_output):
-        energy = self.attn(encoder_output)
-        energy = hidden.dot(energy)
+
+        energy = self.attn(encoder_output).squeeze(0)
+        energy = hidden.squeeze(0).dot(energy)
         return energy
 
 
@@ -142,7 +143,6 @@ class Decoder(nn.Module):
             input_size=hidden_size * 2,
             hidden_size=hidden_size,
             num_layers=self.num_layers,
-            batch_first=True
         )
         self.concat = nn.Linear(hidden_size*2, hidden_size)
 
@@ -152,15 +152,19 @@ class Decoder(nn.Module):
         # input = input.transpose(0, 1)
         batch_size = input.shape[0]
         input_emb = self.embedding(input)
+        #print(input_emb.shape)
         input_emb = input_emb.view(1, self.batch_size, self.hidden_size)
+        rnn_input = torch.cat([input_emb, last_context], 2)
+        # rnn_input = self.concat(rnn_input_cat)
+        # rnn_input = rnn_input.transpose(0,1)
+        # hidden = hidden.transpose(0,1)
 
-        rnn_input = self.concat(input_emb, last_context)
         rnn_output, hidden = self.gru(rnn_input, hidden)
-
         # print(rnn_output.shape, encoder_outputs.shape)
         attn_weights = self.attend(rnn_output, encoder_outputs)
 
-        context = attn_weights.bmm(encoder_outputs.transpose(0, 1))
+        attn_weights = attn_weights.squeeze(0).transpose(0,1)
+        context = attn_weights.bmm(encoder_outputs)
         context = context.squeeze(1).unsqueeze(0)
         output = F.softmax(self.out(torch.cat((rnn_output, context), 2)))
 

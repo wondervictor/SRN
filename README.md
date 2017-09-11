@@ -18,7 +18,10 @@ for more about the Sequence Recoginition Network, paper is here => [Robust Scene
 **I am still proceeding in the project.** Any bug, please issue
 
 
+### ChangeLog
+
+**2017-09-11**: Support Mini-Batch
+
 ### TODO
 
-1. support mini batch 
-2. support beam search
+1. support beam search
