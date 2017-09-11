@@ -64,7 +64,7 @@ class Encoder(nn.Module):
             hidden_size=hidden_size,
             num_layers=num_layers,
             bidirectional=is_bidirectional,
-            # batch_first=True
+            batch_first=True
         )
         self.batch_size = batch_size
         self.out = nn.Linear(hidden_size*2, hidden_size)
@@ -111,29 +111,28 @@ class Attention(nn.Module):
         self.attn = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, hidden, encoder_outputs):
-        seq_len = len(encoder_outputs)
-        batch_size = encoder_outputs.shape[1]
-        attn_energies = Variable(torch.zeros(seq_len, batch_size))
-        for i in range(seq_len):
-            attn_energies[i] = self.score(hidden, encoder_outputs[i])
+        seq_len = encoder_outputs.shape[1]
+        batch_size = encoder_outputs.shape[0]
+        attn_energies = Variable(torch.zeros(batch_size, seq_len))
+
+        for i in range(batch_size):
+            for j in range(seq_len):
+                attn_energies[i, j] = self.score(hidden[:, i], encoder_outputs[i, j].unsqueeze(0))
 
         return F.softmax(attn_energies).unsqueeze(0).unsqueeze(0)
 
     def score(self, hidden, encoder_output):
-        energy = self.attn(encoder_output).squeeze(0)
-        hidden = hidden.view(2, 1, hidden.shape[2])
-        energy = energy.view(2, energy.shape[1], 1)
-        energy = torch.bmm(hidden, energy)
-        energy = energy.squeeze(1)
+        energy = self.attn(encoder_output)
+        energy = hidden.dot(energy)
         return energy
 
 
 class Decoder(nn.Module):
 
-    def __init__(self, hidden_size, output_size, num_layers, max_length):
+    def __init__(self, hidden_size, output_size, batch_size, num_layers, max_length):
         super(Decoder, self).__init__()
         self.attend = Attention(hidden_size, max_length)
-
+        self.batch_size = batch_size
         self.hidden_size =hidden_size
         self.output_size = output_size
         self.num_layers = num_layers
@@ -143,21 +142,24 @@ class Decoder(nn.Module):
             input_size=hidden_size * 2,
             hidden_size=hidden_size,
             num_layers=self.num_layers,
+            batch_first=True
         )
+        self.concat = nn.Linear(hidden_size*2, hidden_size)
 
         self.out = nn.Linear(hidden_size*2, output_size)
 
     def forward(self, input, last_context, hidden, encoder_outputs):
         # input = input.transpose(0, 1)
-
+        batch_size = input.shape[0]
         input_emb = self.embedding(input)
-        input_emb = input_emb.transpose(0,1)
-        rnn_input = torch.cat((input_emb.squeeze(0), last_context.squeeze(0)), 1)
-        rnn_input = rnn_input.unsqueeze(0)
+        input_emb = input_emb.view(1, self.batch_size, self.hidden_size)
+
+        rnn_input = self.concat(input_emb, last_context)
         rnn_output, hidden = self.gru(rnn_input, hidden)
+
         # print(rnn_output.shape, encoder_outputs.shape)
-        attn_weights = self.attend(rnn_output, encoder_outputs).squeeze(0).squeeze(0)
-        attn_weights = attn_weights.transpose(0, 1).unsqueeze(1)
+        attn_weights = self.attend(rnn_output, encoder_outputs)
+
         context = attn_weights.bmm(encoder_outputs.transpose(0, 1))
         context = context.squeeze(1).unsqueeze(0)
         output = F.softmax(self.out(torch.cat((rnn_output, context), 2)))
