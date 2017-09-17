@@ -10,57 +10,6 @@ import torch.utils.data as torch_data
 
 EOS = 1
 
-from torch.nn import functional
-
-def sequence_mask(sequence_length, max_len=None):
-    if max_len is None:
-        max_len = sequence_length.data.max()
-    batch_size = sequence_length.size(0)
-    seq_range = torch.range(0, max_len - 1).long()
-    seq_range_expand = seq_range.unsqueeze(0).expand(batch_size, max_len)
-    seq_range_expand = Variable(seq_range_expand)
-    if sequence_length.is_cuda:
-        seq_range_expand = seq_range_expand.cuda()
-    seq_length_expand = (sequence_length.unsqueeze(1)
-                         .expand_as(seq_range_expand))
-    return seq_range_expand < seq_length_expand
-
-
-def masked_cross_entropy(logits, target, length):
-    length = Variable(torch.LongTensor(length))
-
-    """
-    Args:
-        logits: A Variable containing a FloatTensor of size
-            (batch, max_len, num_classes) which contains the
-            unnormalized probability for each class.
-        target: A Variable containing a LongTensor of size
-            (batch, max_len) which contains the index of the true
-            class for each corresponding step.
-        length: A Variable containing a LongTensor of size (batch,)
-            which contains the length of each data in a batch.
-    Returns:
-        loss: An average loss value masked by the length.
-    """
-
-    # logits_flat: (batch * max_len, num_classes)
-    logits_flat = logits.view(-1, logits.size(-1))
-    # log_probs_flat: (batch * max_len, num_classes)
-    log_probs_flat = functional.log_softmax(logits_flat)
-    # target_flat: (batch * max_len, 1)
-    target_flat = target.view(-1, 1)
-    # losses_flat: (batch * max_len, 1)
-    losses_flat = -torch.gather(log_probs_flat, dim=1, index=target_flat)
-    # losses: (batch, max_len)
-    losses = losses_flat.view(*target.size())
-    # mask: (batch, max_len)
-    mask = sequence_mask(sequence_length=length, max_len=target.size(1))
-    losses = losses * mask.float()
-    loss = losses.sum() / length.float().sum()
-    return loss
-
-
-
 
 class TrainLog(object):
 
@@ -108,9 +57,9 @@ class SRN(object):
             max_length=max_length,
             batch_size=self.batch_size
         )
-        self.cnn_optimizer = optimizer.RMSprop(params=self.cnn.parameters(), lr=self.learning_rate)
-        self.encoder_optimizer = optimizer.RMSprop(params=self.encoder.parameters(), lr=self.learning_rate)
-        self.decoder_optimizer = optimizer.RMSprop(params=self.decoder.parameters(), lr=self.learning_rate)
+        self.cnn_optimizer = optimizer.Adam(params=self.cnn.parameters(), lr=self.learning_rate)
+        self.encoder_optimizer = optimizer.Adam(params=self.encoder.parameters(), lr=self.learning_rate)
+        self.decoder_optimizer = optimizer.Adam(params=self.decoder.parameters(), lr=self.learning_rate)
 
         self.criterion = nn.CrossEntropyLoss()
 
@@ -119,7 +68,7 @@ class SRN(object):
         target = target.squeeze(0)
         target = target[:length]
         sub_loss = self.criterion(input, target)
-        return sub_loss
+        return sub_loss/8
 
     def check_params(self, layer):
         for param in layer.parameters():
@@ -137,7 +86,7 @@ class SRN(object):
         encoder_hidden = self.encoder.init_state()
 
         encoder_outputs, encoder_hidden = self.encoder.forward(input_sequence, encoder_hidden)
-        decoder_input = Variable(torch.LongTensor([0]*self.batch_size))
+        decoder_input = Variable(torch.LongTensor([10]*self.batch_size))
         decoder_context = Variable(torch.zeros(1, self.batch_size, self.decoder_hidden_size))
 
         decoder_hidden = encoder_hidden
@@ -145,7 +94,6 @@ class SRN(object):
         # target = target.type(torch.FloatTensor)
 
         all_decoder_outputs = Variable(torch.zeros(maxlength, self.batch_size, self.output_size))
-
         for i in range(maxlength):
             all_decoder_outputs[i], decoder_context, decoder_hidden, decoder_attn = self.decoder(decoder_input, decoder_context, decoder_hidden, encoder_outputs)
             decoder_input = target[:,:,i]
@@ -155,16 +103,17 @@ class SRN(object):
         for i in range(self.batch_size):
             sub_loss = self.calculate_loss(all_decoder_outputs[:, i, :], target[:, i, :], length=target_lengths[i])
             loss += sub_loss
+        loss = loss/self.batch_size
 
         self.cnn_optimizer.zero_grad()
         self.encoder.zero_grad()
         self.decoder.zero_grad()
         loss.backward()
         self.decoder_optimizer.step()
-        self.check_params(self.decoder)
         self.encoder_optimizer.step()
         self.cnn_optimizer.step()
-
+        # for param in self.decoder.out.parameters():
+        #     print param.grad
         return loss.data[0]
 
     def train(self, dataset):
@@ -190,7 +139,7 @@ class SRN(object):
 
                 loss += current_loss
                 if idx % self.print_step == 0:
-                    print("EPOCH: %s BATCH: %s LOSS: %s AVG_LOSS: %s" % (epoch, idx, current_loss, loss/(idx+1)))
+                    print("EPOCH: %s BATCH: %s LOSS: %s AVG_LOSS: %s" % (epoch, idx/self.batch_size, current_loss, loss/(idx+1)))
 
             print("EPOCH: %s AVG_LOSS: %s" % (epoch, loss/size))
 
@@ -200,16 +149,14 @@ class SRN(object):
 
 def main():
 
-    batch_size = 16
+    batch_size = 4
 
     hyper_paramenters = {
-        "learning_rate": 0.001,
+        "learning_rate": 0.1,
         "batch_size": batch_size,
         "epoches": 100,
         "print_step": 10,
     }
-
-    #train_loader = torch_data.DataLoader(dataset=TestDataset(True), batch_size=batch_size, shuffle=True)
 
     srn = SRN(config=hyper_paramenters, output_size=10, max_length=10)
 

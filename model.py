@@ -24,24 +24,29 @@ class CNNLayers(nn.Module):
         self.conv7 = nn.Conv2d(512, 512, 2, stride=1, padding=0)
         self.pool = nn.MaxPool2d(2)
         self.pool2 = nn.MaxPool2d((2, 1))
-        self.bn = nn.BatchNorm2d(num_features=5)
+        self.bn1 = nn.BatchNorm2d(num_features=64)
+        self.bn2 = nn.BatchNorm2d(num_features=256)
+        self.bn5 = nn.BatchNorm2d(num_features=256)
+        self.bn3 = nn.BatchNorm2d(num_features=512)
+        self.bn4 = nn.BatchNorm2d(num_features=512)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = self.pool(x)
-        #x = self.bn(x)
+        x = self.bn1(x)
         x = F.relu(self.conv2(x))
         x = self.pool(x)
         x = F.relu(self.conv3(x))
+        x = self.bn5(x)
         x = F.relu(self.conv4(x))
-        #x = self.bn(x)
+        x = self.bn2(x)
         x = self.pool(x)
         x = F.relu(self.conv5(x))
         x = F.relu(self.conv6(x))
-        #x = self.bn(x)
+        x = self.bn3(x)
         x = self.pool2(x)
         x = F.relu(self.conv7(x)).squeeze(2)
-        #x = self.bn(x)
+        x = self.bn4(x)
         x = x.transpose(1, 2)
         return x
 
@@ -96,7 +101,7 @@ class Encoder(nn.Module):
         )
         hidden_t = torch.cat((hidden_t[-1], hidden_t[-2]), 1)
         outputs = F.relu(self.out(outputs))
-        hidden_t = F.relu(self.hidden_out(hidden_t))
+        hidden_t = F.tanh(self.hidden_out(hidden_t))
 
         return outputs, hidden_t.unsqueeze(0)
 
@@ -116,10 +121,12 @@ class Attention(nn.Module):
         attn_energies = Variable(torch.zeros(batch_size, seq_len))
 
         for i in range(batch_size):
+            atten = Variable(torch.zeros(seq_len))
             for j in range(seq_len):
-                attn_energies[i, j] = self.score(hidden[:, i], encoder_outputs[i, j].unsqueeze(0))
+                atten[j] = self.score(hidden[:, i], encoder_outputs[i, j].unsqueeze(0))
+            attn_energies[i] = F.softmax(atten)
 
-        return F.softmax(attn_energies).unsqueeze(0).unsqueeze(0)
+        return attn_energies.unsqueeze(0).unsqueeze(0)
 
     def score(self, hidden, encoder_output):
         energy = self.attn(encoder_output).squeeze(0)
@@ -137,7 +144,7 @@ class Decoder(nn.Module):
         self.output_size = output_size
         self.num_layers = num_layers
 
-        self.embedding = nn.Embedding(output_size, hidden_size)
+        self.embedding = nn.Embedding(output_size+1, hidden_size)
         self.gru = nn.GRU(
             input_size=hidden_size * 2,
             hidden_size=hidden_size,
@@ -154,10 +161,12 @@ class Decoder(nn.Module):
         rnn_output, hidden = self.gru(rnn_input, hidden)
 
         attn_weights = self.attend(rnn_output, encoder_outputs)
+        print('---')
         attn_weights = attn_weights.squeeze(0).transpose(0, 1)
         context = attn_weights.bmm(encoder_outputs)
         context = context.squeeze(1).unsqueeze(0)
         cat = torch.cat((rnn_output, context), 2)
+
         out = self.out(cat)
         output = F.softmax(out.squeeze(0))
         return output, context, hidden, attn_weights
