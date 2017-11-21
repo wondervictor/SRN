@@ -99,11 +99,12 @@ class Encoder(nn.Module):
             input,
             hidden
         )
-        hidden_t = torch.cat((hidden_t[-1], hidden_t[-2]), 1)
+        #print(hidden_t.size())
+        #hidden_t = torch.cat((hidden_t[-1], hidden_t[-2]), 1)
         outputs = F.relu(self.out(outputs))
-        hidden_t = F.tanh(self.hidden_out(hidden_t))
 
-        return outputs, hidden_t.unsqueeze(0)
+        #hidden_t = F.tanh(self.hidden_out(hidden_t))
+        return outputs, hidden_t #.unsqueeze(0)
 
 
 class Attention(nn.Module):
@@ -116,8 +117,8 @@ class Attention(nn.Module):
         self.attn = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, hidden, encoder_outputs):
-        seq_len = encoder_outputs.shape[1]
-        batch_size = encoder_outputs.shape[0]
+        seq_len = encoder_outputs.size()[1]
+        batch_size = encoder_outputs.size()[0]
         attn_energies = Variable(torch.zeros(batch_size, seq_len))
 
         for i in range(batch_size):
@@ -144,7 +145,7 @@ class Decoder(nn.Module):
         self.output_size = output_size
         self.num_layers = num_layers
 
-        self.embedding = nn.Embedding(output_size+1, hidden_size)
+        self.embedding = nn.Embedding(output_size, hidden_size)
         self.gru = nn.GRU(
             input_size=hidden_size * 2,
             hidden_size=hidden_size,
@@ -161,7 +162,6 @@ class Decoder(nn.Module):
         rnn_output, hidden = self.gru(rnn_input, hidden)
 
         attn_weights = self.attend(rnn_output, encoder_outputs)
-        print('---')
         attn_weights = attn_weights.squeeze(0).transpose(0, 1)
         context = attn_weights.bmm(encoder_outputs)
         context = context.squeeze(1).unsqueeze(0)
@@ -172,5 +172,92 @@ class Decoder(nn.Module):
         return output, context, hidden, attn_weights
 
 
+class Attn(nn.Module):
+    def __init__(self, method, hidden_size):
+        super(Attn, self).__init__()
+
+        self.method = method
+        self.hidden_size = hidden_size
+
+        if self.method == 'general':
+            self.attn = nn.Linear(self.hidden_size, hidden_size)
+
+        elif self.method == 'concat':
+            self.attn = nn.Linear(self.hidden_size * 2, hidden_size)
+            self.v = nn.Parameter(torch.FloatTensor(1, hidden_size))
+
+    def forward(self, hidden, encoder_outputs):
+        this_batch_size = encoder_outputs.size(0)
+        max_len = encoder_outputs.size(1)
+        # Create variable to store attention energies
+        attn_energies = Variable(torch.zeros(this_batch_size, max_len))  # B x S
+        # For each batch of encoder outputs
+        for b in range(this_batch_size):
+            # Calculate energy for each encoder output
+            for i in range(max_len):
+                attn_energies[b, i] = self.score(hidden[b,:], encoder_outputs[b, i].unsqueeze(0))
+
+        # Normalize energies to weights in range 0 to 1, resize to 1 x B x S
+        return F.softmax(attn_energies).unsqueeze(1)
+
+    def score(self, hidden, encoder_output):
+
+        if self.method == 'dot':
+            energy = hidden.dot(encoder_output)
+            return energy
+
+        elif self.method == 'general':
+            encoder_output = encoder_output.squeeze(0)
+            energy = self.attn(encoder_output)
+            energy = hidden.dot(energy)
+            return energy
+
+        elif self.method == 'concat':
+            energy = self.attn(torch.cat((hidden, encoder_output), 1))
+            energy = self.v.dot(energy)
+            return energy
 
 
+class AttnDecoder(nn.Module):
+
+    def __init__(self, hidden_size, output_size, max_length, n_layers=1, dropout_p=0.1):
+        super(AttnDecoder, self).__init__()
+
+        # Define parameters
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.n_layers = n_layers
+        self.dropout_p = dropout_p
+        self.max_length = max_length
+
+        # Define layers
+        self.embedding = nn.Embedding(output_size, hidden_size)
+        self.dropout = nn.Dropout(dropout_p)
+        self.attn = Attn('general', hidden_size)
+        self.gru = nn.GRU(hidden_size, hidden_size, n_layers, dropout=dropout_p, batch_first=True)
+        self.out = nn.Linear(hidden_size*2, output_size)
+        self.gru_input = nn.Linear(2*hidden_size, hidden_size)
+
+    def forward(self, word_input, last_hidden, encoder_outputs):
+        # Note: we run this one step at a time
+        # TODO: FIX BATCHING
+
+        # Get the embedding of the current input word (last output word)
+        word_embedded = self.embedding(word_input).unsqueeze(1)  # S=B x 1 x N
+        word_embedded = self.dropout(word_embedded)
+        # Calculate attention weights and apply to encoder outputs
+        attn_weights = self.attn(last_hidden[-1], encoder_outputs)
+        context = attn_weights.bmm(encoder_outputs)  # B x 1 x N
+        #context = context.transpose(0, 1)  # 1 x B x N
+
+        # Combine embedded input word and attended context, run through RNN
+        rnn_input = torch.cat((word_embedded, context), 2)
+        rnn_input = F.relu(self.gru_input(rnn_input))
+        output, hidden = self.gru(rnn_input, last_hidden)
+
+        # Final output layer
+        output = output.squeeze(0)  # B x N
+        output = F.log_softmax(self.out(torch.cat((output, context), 2)))
+
+        # Return final output, hidden state, and attention weights (for visualization)
+        return output, hidden, attn_weights
